@@ -41,6 +41,8 @@ Sixty-nine tailored applications, twenty first interviews, and one signed contra
 
 A structured workflow that turns Claude Code into a full-stack job application assistant. The core workflow (self-profiling, fit evaluation, and the drafter-reviewer application pipeline) is **language- and country-agnostic**. The job portal search skills are built for the Danish market (Jobindex, Jobnet, Akademikernes Jobbank, etc.), but the pattern is designed to be swapped for your local job boards.
 
+> **This fork is customized for the Swiss market** (Romandie / French-speaking Switzerland): jobup.ch and job-room.ch portal skills, englishjobsearch.ch, Romandie geo defaults, and a company career-page lookup skill for corporates that don't syndicate to job boards. The Danish demo portals are disabled, not removed. See [`SWITZERLAND.md`](SWITZERLAND.md).
+
 ```
 /setup          /scrape              /apply <url>
   |                |                     |

@@ -18,7 +18,7 @@ description: >
   social worker job denmark, occupation search denmark, esco occupation, job deadline,
   ansøgningsfrist, søg efter job, full time job denmark, part time job denmark.
 context: fork
-enabled: true  # set to false to keep this portal installed but have /scrape skip it
+enabled: false  # Danish demo portal — disabled in this Swiss-market fork (kept for upstream merge-friendliness)
 allowed-tools: Bash(bun run .agents/skills/jobnet-search/cli/src/cli.ts *)
 ---
 
