@@ -62,7 +62,11 @@ Discover all installed portal CLI skills by reading every `SKILL.md` found under
 
 **Honor the `enabled` toggle.** A portal is enabled unless its `SKILL.md` frontmatter sets `enabled: false` (a missing key means enabled — the default). Skip each disabled portal and record it for the Step 5 summary. A fork can thus keep a portal installed but sit out a run without deleting its directory.
 
-For each **enabled** portal skill:
+**Some portal skills have no `cli/` directory by design** (the site sits behind a Cloudflare JS challenge or is otherwise unscrapable, so the skill documents `site:` WebSearch queries instead). Check for `.agents/skills/<portal>/cli/` before assuming a CLI exists. A portal with a `SKILL.md` but no `cli/` is **not broken and must not be skipped** — route it to Step 1c and use the queries its own SKILL.md documents. Such portals previously fell through a gap (1b needs a CLI, 1c only looked for portals with no directory at all) and were silently dropped from every run.
+
+**Portal priority.** If `search-queries.md` states a portal order, follow it, and let the first-priority portal lead the Step 5 table even when parallel execution finishes results out of order. Ordering can matter legally, not just cosmetically: in Switzerland, for example, job-room.ch carries a five-working-day window on covered vacancies that is exclusive to RAV-registered jobseekers before they may be advertised anywhere else, so checking it first is worth more than any query tuning.
+
+For each **enabled** portal skill **that has a `cli/` directory**:
 
 1. Read its `SKILL.md` to find the correct `bun run …` invocation and supported flags.
 2. Translate the query terms from `search-queries.md` into that portal's flag format (e.g. `--key`, `--search-string`, `--query`, filter codes — whatever the portal's SKILL.md specifies).
@@ -78,6 +82,7 @@ If a CLI tool exits with a non-zero code, log the error message and continue —
 
 Use `WebSearch` for:
 - Portals listed in `search-queries.md` that do **not** have a corresponding directory under `.agents/skills/`
+- **Enabled portal skills that have a `SKILL.md` but no `cli/` directory** (CLI-less by design). Use the `site:` query patterns documented in that skill's own SKILL.md rather than guessing. These count as a full portal for the run and belong in the Step 5 results like any other, and the Step 4.75 health check must not report them as broken.
 - Any portal whose CLI fails at runtime
 - When bun is unavailable (Step 1a failed)
 

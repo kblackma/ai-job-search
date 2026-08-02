@@ -24,6 +24,44 @@ unauthenticated JSON API, and **zero runtime dependencies** — it runs with jus
 > This mirrors the repo's `linkedin-search` skill pattern, adapted to job-room.ch's
 > JSON POST-search API instead of scraped HTML.
 
+## Why this portal deserves priority in a Swiss job search
+
+job-room.ch is the SECO / public employment service platform, and Swiss law gives it a
+structural advantage no commercial board has. Under the **job registration requirement**
+(Stellenmeldepflicht / obligation d'annonce), an employer filling a vacancy in a covered
+occupation must report it here and **may not advertise it anywhere else for five working
+days**. That window is exclusive to jobseekers registered with the RAV/ORP.
+
+For a RAV-registered user this is a real head start: covered roles appear here *before*
+jobup.ch, LinkedIn or the employer's own careers page, and applying inside the window means
+a much smaller applicant pool. The covered-occupation list is revised annually and was
+expanded on 1 January 2026, taking coverage from roughly 6.5% to 10.8% of the workforce.
+
+Practical consequence: in a Swiss fork, run this portal **first**, and search all relevant
+cantons in one call rather than just the home canton, e.g. all of Romandie with
+`--canton GE,VD,VS,NE,FR,JU`.
+
+### Three API gotchas worth knowing
+
+1. **`detail` needs the full UUID.** `--format table` truncates the id to eight characters,
+   and feeding that back returns `{"error":"Could not parse a job-room UUID","code":"BAD_ID"}`.
+   Use `--format json` to get the full `id` before any `detail` call.
+2. **No explicit job-registration flag exists in the API.** The closest usable signal is
+   **`externalUrl`**: when present, the posting is already syndicated publicly (commonly from
+   jobup.ch), so it is *not* exclusive. A result with **no `externalUrl`** and a recent
+   `publicationStart` is plausibly still inside the exclusive window. This is a heuristic —
+   report it as plausible, never as confirmed.
+3. **Keyword relevance is loose, and multi-word queries degrade badly.** A query like
+   `"sécurité information"` returns largely unrelated postings (the API appears to match
+   terms loosely), while a single compound term like `"cybersécurité"` returns relevant ones.
+   Related queries also return inconsistent sets from the same corpus, so a role can surface
+   under one term and not under a near-synonym. Run **several short queries** rather than one
+   precise long one, and filter client-side.
+
+`languageIsoCode` on each result gives the posting language directly, which is more reliable
+than inferring it from the title — though not perfect (French-titled postings occasionally
+carry `"de"`), so treat a mismatch as inconclusive.
+
 ## When to use this skill
 
 - Search for job openings anywhere in Switzerland, by keyword and/or canton
