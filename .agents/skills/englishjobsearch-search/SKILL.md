@@ -20,22 +20,63 @@ allowed-tools: WebSearch, WebFetch
 Switzerland** — a key portal for roles that don't require fluent French/German, common in
 international companies, NGOs, and multinationals around Geneva and Lausanne.
 
-## ⚠️ No CLI — WebSearch/WebFetch only
+## ⚠️ No CLI — WebSearch only
 
-The site is protected by a Cloudflare managed challenge (JavaScript required), so a
-zero-dependency CLI scraper **does not work** here. This skill has **no `cli/` directory
-by design.** During `/scrape` (Step 1b portal discovery), treat this portal as a
-**WebSearch-driven portal**:
+The site is protected by a Cloudflare **managed JS challenge**. Verified: `curl` with a
+full browser user-agent and header set still returns **HTTP 403 + "Just a moment"**, so
+this is *not* the user-agent 403 that browser headers fix. There is no header trick, and
+`WebFetch` on an individual posting hits the same wall. This skill has **no `cli/`
+directory by design**, and `/scrape` routes it to the Step 1c WebSearch path.
 
-1. **Search** via WebSearch with `site:` queries, e.g.:
-   - `site:englishjobsearch.ch "data engineer" Geneva`
-   - `site:englishjobsearch.ch <role> Lausanne OR Geneva OR "Vaud"`
-   - `site:englishjobsearch.ch <skill> remote Switzerland`
-2. **Detail**: WebFetch the individual posting URL returned by the search. If WebFetch is
-   blocked by the challenge, fall back to the Google cache/snippet content and note the
-   posting URL for the user to open manually.
-3. Postings here frequently syndicate from LinkedIn and company ATS pages — **dedupe**
-   against results from `linkedin-search` and `company-pages-search` by company + title.
+**Do not report this portal as broken or degraded** in the Step 4.75 health check — no CLI
+is the intended state.
+
+## Search by canton — this is the key to getting results
+
+The site is organised **by canton**, and generic `site:` queries mostly return landing
+pages rather than postings. Target the canton taxonomy directly. Confirmed live URL
+patterns:
+
+```
+https://englishjobsearch.ch/in/<canton-slug>/<topic-slug>    e.g. /in/canton-geneve/cyber_security
+https://englishjobsearch.ch/in/<canton-slug>                 e.g. /in/canton-vaud
+https://englishjobsearch.ch/jobs/<topic-slug>                e.g. /jobs/cyber_security   (Switzerland-wide)
+https://englishjobsearch.ch/in/<city-slug>                   e.g. /in/geneve
+```
+
+The canton index is linked from the site's home page. **Romandie canton slugs:**
+`canton-geneve`, `canton-vaud`, `canton-valais`, `canton-neuchatel`, `canton-fribourg`,
+`canton-jura`. City-level slugs also exist: `geneve`, `lausanne`.
+
+**Topic slugs** are lowercase with underscores. Confirmed to exist: `cyber_security`,
+`computer`, `devops`, `project_manager`, `backend_developer`, `frontend_developer`, `qa`,
+`specialist`. An unknown slug simply returns nothing, costing one search.
+
+### Query patterns
+
+Run these as WebSearch queries. Including the canton path is what makes the site surface
+individual postings rather than its own landing pages:
+
+```
+site:englishjobsearch.ch/in/<canton-slug> <topic-slug>
+site:englishjobsearch.ch/in/<canton-slug> <role keywords>
+site:englishjobsearch.ch/jobs/<topic-slug> <role keywords>      # Switzerland-wide sweep
+```
+
+### Detail fetches and honesty limits
+
+Because both the challenge and `WebFetch` block posting pages, rely on the search result
+title and snippet, record the posting URL for the user to open manually, and **never
+fabricate posting content that was not in the snippet**. If a posting looks strong and the
+snippet is thin, report it as "detail unavailable, open manually" rather than guessing.
+
+In practice WebSearch surfaces this site's category pages more readily than individual
+postings, so yield through search alone is modest. A browser-automation route (driving a
+real browser session that can pass the challenge) is the reliable way to read the canton
+pages if one is available.
+
+Postings here frequently syndicate from LinkedIn and company ATS pages — **dedupe** against
+`linkedin-search` and `company-pages-search` results by company + title.
 
 ## Personal use only
 
