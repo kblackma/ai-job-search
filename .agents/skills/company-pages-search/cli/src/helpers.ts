@@ -7,6 +7,7 @@
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 const UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
@@ -40,7 +41,9 @@ export interface NormalizedJob {
 // Repo root = three levels up from cli/src/ (cli/src -> cli -> company-pages-search
 // -> skills -> .agents -> repo root is one more up). Resolved relative to this file
 // so it works regardless of the caller's cwd.
-const SKILL_DIR = path.resolve(new URL(".", import.meta.url).pathname, "../..")
+// fileURLToPath, not URL.pathname: on Windows the latter yields "/C:/Users/..."
+// and path.resolve then produces "C:\\C:\\Users\\...", so every command ENOENTs.
+const SKILL_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "../..")
 const REPO_ROOT = path.resolve(SKILL_DIR, "../../..")
 const REGISTRY_PATH = path.join(REPO_ROOT, "company_pages.json")
 const EXAMPLE_REGISTRY_PATH = path.join(SKILL_DIR, "company_pages.example.json")

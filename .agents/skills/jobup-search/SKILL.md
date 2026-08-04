@@ -11,7 +11,7 @@ description: >
   offres d'emploi Suisse romande, recherche d'emploi Genève, postes vacants, travail
   en Suisse, offres d'emploi jobup, chercher un emploi.
 context: fork
-enabled: true  # set to false to keep this portal installed but have /scrape skip it
+enabled: false  # OFF BY DEFAULT: this CLI uses jobup.ch's /api/ path, which their robots.txt disallows for *. Enabling it is your explicit decision - read the robots.txt findings in url-reference.md first
 allowed-tools: Bash(bun run .agents/skills/jobup-search/cli/src/cli.ts *)
 ---
 

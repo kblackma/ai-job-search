@@ -10,7 +10,7 @@ description: >
   englishjobsearch, international jobs geneva, NGO jobs geneva, english jobs
   zurich, anglophone jobs switzerland.
 context: fork
-enabled: true  # set to false to keep this portal installed but have /scrape skip it
+enabled: false  # DISABLED: topic categories are substring keyword matches, not curated - noise, not signal
 allowed-tools: WebSearch, WebFetch
 ---
 
