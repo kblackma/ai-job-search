@@ -205,6 +205,19 @@ export interface FetchDeps {
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
 
+/**
+ * Wrap a thrown transport error with its classification.
+ *
+ * classifyFailure was only ever reached on HTTP status errors, so timeouts, DNS
+ * failures and bad certificates surfaced as bare messages and landed in the
+ * registry's failure_class as "other" — the three cases the classifier exists to
+ * tell apart.
+ */
+function classifyThrown(url: string, err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err)
+  return new Error(`Request failed: ${url} — ${msg} [${classifyFailure(null, err)}]`)
+}
+
 /** Fetch JSON with exponential backoff on 429/5xx. Returns null on 404. */
 export async function jsonFetch(url: string, deps: FetchDeps = {}): Promise<unknown | null> {
   const doFetch = deps.fetchImpl ?? fetch
@@ -212,14 +225,19 @@ export async function jsonFetch(url: string, deps: FetchDeps = {}): Promise<unkn
   const maxRetries = 4
   let delay = 500
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const response = await doFetch(url, {
-      headers: {
-        "User-Agent": UA,
-        Accept: "application/json,text/plain,*/*",
-      },
-      redirect: "follow",
-      signal: AbortSignal.timeout(15000),
-    })
+    let response: Response
+    try {
+      response = await doFetch(url, {
+        headers: {
+          "User-Agent": UA,
+          Accept: "application/json,text/plain,*/*",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      })
+    } catch (e) {
+      throw classifyThrown(url, e)
+    }
     if (response.status === 429 || response.status >= 500) {
       if (attempt === maxRetries) {
         throw new Error(
@@ -257,14 +275,19 @@ export async function htmlFetch(url: string, deps: FetchDeps = {}): Promise<stri
   const maxRetries = 4
   let delay = 500
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const response = await doFetch(url, {
-      headers: {
-        "User-Agent": UA,
-        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-      },
-      redirect: "follow",
-      signal: AbortSignal.timeout(15000),
-    })
+    let response: Response
+    try {
+      response = await doFetch(url, {
+        headers: {
+          "User-Agent": UA,
+          Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(15000),
+      })
+    } catch (e) {
+      throw classifyThrown(url, e)
+    }
     if (response.status === 429 || response.status >= 500) {
       if (attempt === maxRetries) {
         throw new Error(

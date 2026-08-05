@@ -210,3 +210,51 @@ describe("htmlFetch escalation on 403", () => {
     expect(seen).toEqual(["https://example.com/careers/geneva"]);
   });
 });
+
+describe("transport errors are classified, not left bare", () => {
+  const throwingFetch = (err: Error): typeof fetch =>
+    (async () => {
+      throw err;
+    }) as unknown as typeof fetch;
+
+  test("a timeout surfaces as [timeout] rather than an unlabelled message", async () => {
+    const p = htmlFetch("https://example.com/jobs", {
+      fetchImpl: throwingFetch(new Error("The operation timed out.")),
+    });
+    await expect(p).rejects.toThrow(/\[timeout\]/);
+  });
+
+  test("a bad certificate surfaces as [tls_error]", async () => {
+    const p = htmlFetch("https://example.com/jobs", {
+      fetchImpl: throwingFetch(new Error("unable to verify the first certificate")),
+    });
+    await expect(p).rejects.toThrow(/\[tls_error\]/);
+  });
+
+  test("a DNS failure surfaces as [dns_failure]", async () => {
+    const p = htmlFetch("https://nope.example/jobs", {
+      fetchImpl: throwingFetch(new Error("getaddrinfo ENOTFOUND nope.example")),
+    });
+    await expect(p).rejects.toThrow(/\[dns_failure\]/);
+  });
+
+  test("the failing URL is named, so a multi-entry scan says which one broke", async () => {
+    const p = htmlFetch("https://example.com/careers", {
+      fetchImpl: throwingFetch(new Error("The operation timed out.")),
+    });
+    await expect(p).rejects.toThrow(/example\.com\/careers/);
+  });
+
+  test("a transport error is not mistaken for a block — the gate is never consulted", async () => {
+    let asked = 0;
+    const p = htmlFetch("https://example.com/jobs", {
+      fetchImpl: throwingFetch(new Error("The operation timed out.")),
+      gate: async () => {
+        asked++;
+        return true;
+      },
+    });
+    await expect(p).rejects.toThrow();
+    expect(asked).toBe(0);
+  });
+});
