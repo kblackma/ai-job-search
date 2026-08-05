@@ -1,5 +1,5 @@
 import { loadRegistry, matchesFilters, writeError, type NormalizedJob, type RegistryEntry } from "../helpers.js"
-import { fetchGreenhouse, fetchLever, fetchSmartRecruiters, fetchGeneric } from "../ats.js"
+import { fetchGreenhouse, fetchLever, fetchSmartRecruiters, fetchOracle, fetchGeneric } from "../ats.js"
 
 export interface SearchOpts {
   company?: string
@@ -17,6 +17,8 @@ async function fetchEntry(entry: RegistryEntry): Promise<NormalizedJob[]> {
       return fetchLever(entry)
     case "smartrecruiters":
       return fetchSmartRecruiters(entry)
+    case "oracle":
+      return fetchOracle(entry)
     case "generic":
     default:
       return fetchGeneric(entry)

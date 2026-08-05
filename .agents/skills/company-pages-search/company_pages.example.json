@@ -32,6 +32,14 @@
     "notes": "Real, public SmartRecruiters company id — verified 2026-08-01. Used here as a worked example of the smartrecruiters ats type."
   },
   {
+    "name": "Union Bancaire Privée",
+    "careers_url": "https://www.ubp.com/en/careers",
+    "ats": "oracle",
+    "ats_id": "iaadtu.fa.ocs.oraclecloud.eu|CX_1",
+    "locations_filter": ["Geneva", "Zurich"],
+    "notes": "Real, public Oracle Cloud HCM (Candidate Experience) site — verified 2026-08-05, 43 live requisitions. Worked example of the oracle ats type: ats_id is \"<host>|<siteNumber>\", because the API host is tenant-specific and cannot be derived from the company name. Without this adapter such sites fall to ats=generic and return nothing, since the portal renders its listings client-side."
+  },
+  {
     "name": "Placeholder Genève Pharma SA",
     "careers_url": "https://example.com/careers",
     "ats": "generic",

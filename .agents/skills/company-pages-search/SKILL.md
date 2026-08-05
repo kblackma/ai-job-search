@@ -1,6 +1,6 @@
 ---
 name: company-pages-search
-version: 1.0.0
+version: 1.1.0
 description: >
   Registry-driven lookups of specific companies' own career pages — for
   corporates that don't syndicate all their positions to job boards (common
@@ -18,9 +18,9 @@ Looks up job openings directly on a **registry of specific companies you care ab
 rather than a generic job board. Many corporates — especially Swiss corporates, banks,
 pharma, and other orgs around Geneva/Lausanne — only post a subset of their open roles
 to LinkedIn/Indeed/etc, and keep the full list on their own `careers`/`jobs` page. This
-skill uses the public JSON APIs behind the three most common applicant-tracking systems
-(Greenhouse, Lever, SmartRecruiters) where a company uses one, and falls back to a
-best-effort HTML scrape (or a WebFetch by the agent) otherwise.
+skill uses the public JSON APIs behind the four most common applicant-tracking systems
+(Greenhouse, Lever, SmartRecruiters, Oracle Cloud HCM) where a company uses one, and
+falls back to a best-effort HTML scrape (or a WebFetch by the agent) otherwise.
 
 Zero runtime dependencies — it runs with just `bun`.
 
@@ -60,9 +60,12 @@ Each entry:
 - `name` — display name; also the `--company` key used by `search`/`detail`.
 - `careers_url` — the company's own careers/jobs page (used for `generic` scraping and
   as a human-readable link).
-- `ats` — one of `greenhouse` | `lever` | `smartrecruiters` | `generic`.
-- `ats_id` — the ATS's board/company token. Required for the three named ATS types;
-  leave empty (`""`) for `generic`.
+- `ats` — one of `greenhouse` | `lever` | `smartrecruiters` | `oracle` | `generic`.
+- `ats_id` — the ATS's board/company token. Required for the four named ATS types;
+  leave empty (`""`) for `generic`. **Oracle is the exception to the single-token rule:**
+  its API host is tenant-specific and cannot be derived from the company name, so
+  `ats_id` carries both halves as `"<host>|<siteNumber>"`, e.g.
+  `"iaadtu.fa.ocs.oraclecloud.eu|CX_1"`.
 - `locations_filter` — optional. If non-empty, results are kept only when their
   location string contains one of these substrings (case-insensitive). Jobs with no
   parsed location are always kept (rather than silently dropped).
@@ -78,7 +81,12 @@ Open the company's careers page and either:
 2. **Open browser devtools → Network tab**, click into a job listing, and look for an
    XHR request to `boards-api.greenhouse.io`, `api.lever.co`, or
    `api.smartrecruiters.com`. The path segment right after `/boards/` or `/companies/`
-   or `/postings/` is the `ats_id`.
+   or `/postings/` is the `ats_id`. For **Oracle Cloud HCM** the XHR goes to
+   `<tenant>.fa.<region>.oraclecloud.com/hcmRestApi/...` and carries
+   `finder=findReqs;siteNumber=CX_1` — take the host and that `siteNumber` and join them
+   with a pipe. Oracle career sites are a large share of European bank and corporate
+   portals, and they render listings client-side, so without this adapter they fall to
+   `generic` and return nothing.
 3. If neither shows up, the company likely runs a custom/in-house careers page, or an
    ATS this skill doesn't have a direct integration for (Workday, SAP SuccessFactors,
    iCIMS, etc. are common and JS-heavy). Set `ats: "generic"` and leave `ats_id: ""`.
@@ -110,6 +118,7 @@ Per-`ats` behavior:
 - `greenhouse` → `GET https://boards-api.greenhouse.io/v1/boards/<ats_id>/jobs`
 - `lever` → `GET https://api.lever.co/v0/postings/<ats_id>?mode=json`
 - `smartrecruiters` → `GET https://api.smartrecruiters.com/v1/companies/<ats_id>/postings`
+- `oracle` → `GET https://<host>/hcmRestApi/resources/latest/recruitingCEJobRequisitions?finder=findReqs;siteNumber=<siteNumber>,...`
 - `generic` → fetches `careers_url`, strips tags, and extracts links whose href/text
   look job-related (contains "job", "career", "vacan", "position", "opening",
   "opportunit", or "role"), emitting a best-effort "manual review" record per link with
@@ -122,8 +131,8 @@ bun run .agents/skills/company-pages-search/cli/src/cli.ts detail --company <nam
 ```
 
 `<job id>` is the ATS's own id from a `search` result's `id` field. Only works for
-`greenhouse`/`lever`/`smartrecruiters` entries — `generic` entries have no detail API
-(see below).
+`greenhouse`/`lever`/`smartrecruiters`/`oracle` entries — `generic` entries have no
+detail API (see below).
 
 ## ⚠️ `generic` entries: WebFetch is the primary path, not the CLI scrape
 
@@ -163,10 +172,33 @@ process exits with code `1`. Per-entry fetch failures during `search` are collec
 `meta.errors` in JSON output (or a stderr `warnings` line for `table`/`plain`) rather than
 aborting the whole run — one bad registry entry never blocks the others.
 
+## How this skill identifies itself
+
+Every request identifies honestly, as
+`company-pages-search-skill/1.0 (+https://github.com/MadsLorentzen/ai-job-search)`.
+Browser-shaped headers are **not** the default and are never sent speculatively.
+
+A `401`/`403` on a `generic` page means a bot filter, not a stated policy, so the CLI
+retries once through `curl` with a full browser header set — but only after
+`tools/robots_check.py` confirms the site's published policy permits that path. That is
+the boundary `.claude/skills/job-application-assistant/09-web-research.md` states: the
+retry exists to get past bot-filtering firewalls on sites whose robots.txt permits
+access, and it is never used to override a site that has said no.
+
+The gate fails closed. If `robots.txt` cannot be read, if the checker is missing, or if
+`python3` is unavailable, permission is unconfirmed and the retry does not run — the
+entry degrades to "no results" and the agent falls back to WebFetch/WebSearch. The CLI
+does not carry its own robots parser: it shells out to `tools/robots_check.py` so the
+repo has exactly one definition of what "the site permits this" means.
+
 ## Notes
 
-- All requests set a browser-like `User-Agent`.
 - The CLI retries 429/5xx with exponential backoff.
 - `locations_filter` on a registry entry and `--location` on the CLI both apply (AND);
   set `locations_filter: []` to disable the registry-level filter for that company.
-- See `url-reference.md` for the three ATS APIs' exact shapes and known quirks.
+- Fetch failures are classified (`bot_blocked`, `url_not_found`, `rate_limited`,
+  `server_error`, `timeout`, `dns_failure`, `tls_error`) so a wrong URL is
+  distinguishable from a block.
+- See `url-reference.md` for the four ATS APIs' exact shapes and known quirks.
+- Offline tests live in `cli/tests/` and run with `bun test` from `cli/`; they stub the
+  network and the robots gate, so the suite never makes a request.

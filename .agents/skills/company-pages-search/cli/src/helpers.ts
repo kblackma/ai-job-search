@@ -1,6 +1,7 @@
 // Registry-driven lookups against companies' own career pages, for corporates
-// that don't syndicate all positions to job boards. Three ATS types have public,
-// unauthenticated JSON APIs (Greenhouse, Lever, SmartRecruiters); everything else
+// that don't syndicate all positions to job boards. Four ATS types have public,
+// unauthenticated JSON APIs (Greenhouse, Lever, SmartRecruiters, Oracle Cloud
+// HCM "Candidate Experience"); everything else
 // ("generic") gets a best-effort HTML scrape here, with a documented fallback to
 // WebFetch/WebSearch for JS-heavy or Cloudflare-protected sites (see SKILL.md).
 
@@ -9,15 +10,56 @@ import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 
-const UA =
+// Honest identification is the default on every request. This CLI says what it
+// is and where it comes from, exactly like the other portal CLIs in this repo.
+export const UA = "company-pages-search-skill/1.0 (+https://github.com/MadsLorentzen/ai-job-search)"
+
+// The browser-shaped request below is NOT the default. It runs only after
+// tools/robots_check.py has confirmed the site's published policy permits the
+// path — the boundary 09-web-research.md states: the retry exists to get past
+// bot-filtering firewalls on sites whose robots.txt permits access, never to
+// override a site that has said no.
+//
+// A browser User-Agent alone would not be enough anyway: Cloudflare and Akamai
+// fingerprint the whole header set, and a request carrying only User-Agent +
+// Accept reads as automation regardless of what the UA claims.
+const BROWSER_UA =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 " +
   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+const BROWSER_HEADERS: Record<string, string> = {
+  "User-Agent": BROWSER_UA,
+  "Accept-Language": "en-GB,en;q=0.9,fr;q=0.8,de;q=0.7",
+  "Upgrade-Insecure-Requests": "1",
+  "Sec-Fetch-Dest": "document",
+  "Sec-Fetch-Mode": "navigate",
+  "Sec-Fetch-Site": "none",
+  "Sec-Fetch-User": "?1",
+  "sec-ch-ua": '"Chromium";v="120", "Not(A:Brand";v="24"',
+  "sec-ch-ua-mobile": "?0",
+  "sec-ch-ua-platform": '"macOS"',
+}
 
 export function writeError(error: string, code: string): void {
   process.stderr.write(JSON.stringify({ error, code }) + "\n")
 }
 
-export type AtsType = "greenhouse" | "lever" | "smartrecruiters" | "generic"
+/** Classify a failure so callers can tell "blocked" from "wrong URL" from "down". */
+export function classifyFailure(status: number | null, err?: unknown): string {
+  if (status === 403 || status === 401) return "bot_blocked"
+  if (status === 404) return "url_not_found"
+  if (status === 429) return "rate_limited"
+  if (status !== null && status >= 500) return "server_error"
+  const msg = err instanceof Error ? err.message : String(err ?? "")
+  // "The operation timed out" is what AbortSignal.timeout actually produces —
+  // matching only "timeout" misfiled every real timeout as "unknown".
+  if (/time(d\s?)?out|abort/i.test(msg)) return "timeout"
+  if (/getaddrinfo|ENOTFOUND|dns/i.test(msg)) return "dns_failure"
+  if (/certificate|TLS|SSL/i.test(msg)) return "tls_error"
+  return "unknown"
+}
+
+export type AtsType = "greenhouse" | "lever" | "smartrecruiters" | "oracle" | "generic"
 
 export interface RegistryEntry {
   name: string
@@ -38,15 +80,98 @@ export interface NormalizedJob {
   id?: string
 }
 
-// Repo root = three levels up from cli/src/ (cli/src -> cli -> company-pages-search
-// -> skills -> .agents -> repo root is one more up). Resolved relative to this file
-// so it works regardless of the caller's cwd.
-// fileURLToPath, not URL.pathname: on Windows the latter yields "/C:/Users/..."
-// and path.resolve then produces "C:\\C:\\Users\\...", so every command ENOENTs.
-const SKILL_DIR = path.resolve(fileURLToPath(new URL(".", import.meta.url)), "../..")
+/**
+ * Resolve the skill directory from this module's URL.
+ *
+ * Repo root = three levels up from cli/src/ (cli/src -> cli -> company-pages-search
+ * -> skills -> .agents -> repo root is one more up). Resolved relative to this file
+ * so it works regardless of the caller's cwd.
+ *
+ * fileURLToPath, not URL.pathname: on Windows the latter yields "/C:/Users/...",
+ * where the leading slash makes the drive letter an ordinary path segment.
+ * path.resolve then anchors it to the current drive — "C:\\C:\\Users\\..." — so
+ * every command ENOENTs on the registry.
+ * The URL-to-path conversion and the path implementation are parameters so the
+ * Windows case is testable from any platform.
+ */
+export function resolveSkillDir(
+  moduleUrl: string,
+  toPath: (u: URL) => string = fileURLToPath,
+  p: Pick<typeof path, "resolve"> = path,
+): string {
+  return p.resolve(toPath(new URL(".", moduleUrl)), "../..")
+}
+
+const SKILL_DIR = resolveSkillDir(import.meta.url)
 const REPO_ROOT = path.resolve(SKILL_DIR, "../../..")
 const REGISTRY_PATH = path.join(REPO_ROOT, "company_pages.json")
 const EXAMPLE_REGISTRY_PATH = path.join(SKILL_DIR, "company_pages.example.json")
+
+/**
+ * The repo's canonical robots gate. Reimplementing RFC 9309 matching here would
+ * give the repo two implementations that drift; this shells out to the one that
+ * already has pinned tests (tests/test_robots_check.py), so there is exactly one
+ * definition of what "the site permits this" means.
+ */
+export const ROBOTS_CHECK_PY = path.join(REPO_ROOT, "tools", "robots_check.py")
+
+/** Decides whether a browser-shaped request may be sent to `url`. */
+export type RobotsGate = (url: string) => Promise<boolean>
+
+/**
+ * Run tools/robots_check.py. Exit 0 = permitted, exit 1 = disallowed or
+ * unconfirmed, exit 2 = usage error.
+ *
+ * Fails closed on every unexpected condition — no python3, checker missing,
+ * crash, timeout. A gate that cannot answer must not grant permission, and the
+ * caller degrades to "no results" rather than proceeding unchecked.
+ */
+export async function robotsCheckPyGate(
+  url: string,
+  script: string = ROBOTS_CHECK_PY,
+  python = "python3",
+): Promise<boolean> {
+  if (!existsSync(script)) return false
+  const { execFile } = await import("node:child_process")
+  const { promisify } = await import("node:util")
+  const run = promisify(execFile)
+  try {
+    await run(python, [script, url], { timeout: 30000, maxBuffer: 1024 * 1024 })
+    return true // exit 0
+  } catch {
+    return false // non-zero exit, missing interpreter, or timeout
+  }
+}
+
+/**
+ * Last-resort HTML fetch via curl, behind the robots gate.
+ *
+ * Cloudflare and Akamai fingerprint the TLS handshake (JA3/JA4), not just the
+ * headers. Bun's fetch is blocked on some corporate sites where curl, sending
+ * byte-identical headers, is served normally — verified on weforum.org and
+ * cargill.com, both 403 via fetch and 200 via curl. No header set closes that
+ * gap, so when fetch reports 403 we retry once through curl.
+ *
+ * Returns "" when the gate refuses, when curl is unavailable, or when curl also
+ * fails, so callers degrade to "no results" rather than crashing.
+ */
+export async function curlFallback(url: string, gate: RobotsGate = robotsCheckPyGate): Promise<string> {
+  if (!(await gate(url))) return ""
+  const { execFile } = await import("node:child_process")
+  const { promisify } = await import("node:util")
+  const run = promisify(execFile)
+  const args = [
+    "-sL", "--compressed", "--max-time", "25",
+    ...Object.entries(BROWSER_HEADERS).flatMap(([k, v]) => ["-H", `${k}: ${v}`]),
+    url,
+  ]
+  try {
+    const { stdout } = await run("curl", args, { maxBuffer: 20 * 1024 * 1024, timeout: 30000 })
+    return stdout ?? ""
+  } catch {
+    return ""
+  }
+}
 
 /**
  * Load the personal registry (company_pages.json at repo root). Falls back to
@@ -70,12 +195,24 @@ export async function loadRegistry(): Promise<RegistryEntry[]> {
   return parsed as RegistryEntry[]
 }
 
+/** Seams for offline tests; production callers use the defaults. */
+export interface FetchDeps {
+  fetchImpl?: typeof fetch
+  sleep?: (ms: number) => Promise<void>
+  gate?: RobotsGate
+  curl?: (url: string, gate: RobotsGate) => Promise<string>
+}
+
+const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
 /** Fetch JSON with exponential backoff on 429/5xx. Returns null on 404. */
-export async function jsonFetch(url: string): Promise<unknown | null> {
+export async function jsonFetch(url: string, deps: FetchDeps = {}): Promise<unknown | null> {
+  const doFetch = deps.fetchImpl ?? fetch
+  const sleep = deps.sleep ?? realSleep
   const maxRetries = 4
   let delay = 500
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const response = await fetch(url, {
+    const response = await doFetch(url, {
       headers: {
         "User-Agent": UA,
         Accept: "application/json,text/plain,*/*",
@@ -85,28 +222,42 @@ export async function jsonFetch(url: string): Promise<unknown | null> {
     })
     if (response.status === 429 || response.status >= 500) {
       if (attempt === maxRetries) {
-        throw new Error(`Request failed: ${response.status} ${response.statusText}`)
+        throw new Error(
+          `Request failed: ${response.status} ${response.statusText} [${classifyFailure(response.status)}]`,
+        )
       }
       const jitter = Math.floor(Math.random() * 400)
-      await new Promise((r) => setTimeout(r, delay + jitter))
+      await sleep(delay + jitter)
       delay = Math.min(delay * 2, 6000)
       continue
     }
     if (response.status === 404) return null
     if (!response.ok) {
-      throw new Error(`Request failed: ${response.status} ${response.statusText}`)
+      throw new Error(
+        `Request failed: ${response.status} ${response.statusText} [${classifyFailure(response.status)}]`,
+      )
     }
     return response.json()
   }
   throw new Error("Request failed after max retries")
 }
 
-/** Fetch HTML with the same backoff policy, for generic-ATS scraping. */
-export async function htmlFetch(url: string): Promise<string> {
+/**
+ * Fetch HTML with the same backoff policy, for generic-ATS scraping.
+ *
+ * Identifies honestly on the first attempt. Only a 401/403 — a bot filter, not
+ * a stated policy — triggers the browser-shaped curl retry, and only after
+ * tools/robots_check.py confirms the site permits the path.
+ */
+export async function htmlFetch(url: string, deps: FetchDeps = {}): Promise<string> {
+  const doFetch = deps.fetchImpl ?? fetch
+  const sleep = deps.sleep ?? realSleep
+  const gate = deps.gate ?? robotsCheckPyGate
+  const curl = deps.curl ?? curlFallback
   const maxRetries = 4
   let delay = 500
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const response = await fetch(url, {
+    const response = await doFetch(url, {
       headers: {
         "User-Agent": UA,
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -116,16 +267,28 @@ export async function htmlFetch(url: string): Promise<string> {
     })
     if (response.status === 429 || response.status >= 500) {
       if (attempt === maxRetries) {
-        throw new Error(`Request failed: ${response.status} ${response.statusText}`)
+        throw new Error(
+          `Request failed: ${response.status} ${response.statusText} [${classifyFailure(response.status)}]`,
+        )
       }
       const jitter = Math.floor(Math.random() * 400)
-      await new Promise((r) => setTimeout(r, delay + jitter))
+      await sleep(delay + jitter)
       delay = Math.min(delay * 2, 6000)
       continue
     }
     if (response.status === 404) return ""
+    if (response.status === 403 || response.status === 401) {
+      const viaCurl = await curl(url, gate)
+      if (viaCurl) return viaCurl
+      throw new Error(
+        `Request failed: ${response.status} ${response.statusText} ` +
+          `[${classifyFailure(response.status)}] (robots gate refused or curl fallback failed)`,
+      )
+    }
     if (!response.ok) {
-      throw new Error(`Request failed: ${response.status} ${response.statusText}`)
+      throw new Error(
+        `Request failed: ${response.status} ${response.statusText} [${classifyFailure(response.status)}]`,
+      )
     }
     return response.text()
   }

@@ -65,6 +65,50 @@ GET https://api.smartrecruiters.com/v1/companies/<company_id>/postings/<posting_
   skill concatenates every section's stripped text in `detail`.
 - Public job URL pattern: `https://jobs.smartrecruiters.com/<company_id>/<posting_id>`.
 
+## Oracle Cloud HCM — "Candidate Experience" (Oracle CX)
+
+The ATS behind a large share of European bank and corporate career sites. The portal is
+a JS app, but it is backed by an unauthenticated REST API.
+
+**List:**
+
+```
+GET https://<host>/hcmRestApi/resources/latest/recruitingCEJobRequisitions
+      ?onlyData=true
+      &expand=requisitionList
+      &finder=findReqs;siteNumber=<siteNumber>,limit=<n>,sortBy=POSTING_DATES_DESC
+```
+
+**Detail:**
+
+```
+GET https://<host>/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails
+      ?onlyData=true
+      &finder=ById;Id=<jobId>,siteNumber=<siteNumber>
+```
+
+Quirks, all verified live against UBP (`iaadtu.fa.ocs.oraclecloud.eu`, `CX_1`) on
+2026-08-05:
+
+- `ats_id` is `"<host>|<siteNumber>"`. The host is the customer's Oracle Fusion tenant
+  and cannot be derived from the company name; `siteNumber` is usually `CX_1`.
+- The `finder` value must be sent **percent-encoded** — it contains `;` and `,`, which
+  otherwise terminate the parameter.
+- The list response nests one level deeper than it looks:
+  `items[0].requisitionList[]`, not `items[]`.
+- The **detail** endpoint rejects the `expand` values the list endpoint accepts, and
+  rejects `jobId=` as a finder key (`ById;Id=<jobId>` is correct). Both mistakes return
+  HTTP 400 with a readable message rather than an empty result.
+- List records often carry only `PrimaryLocationCountry` (an ISO code like `CH`), while
+  the detail record carries a human-readable `PrimaryLocation` ("Geneva, Switzerland").
+  The adapter prefers `PrimaryLocation` and falls back to the country code.
+- Description HTML is split across `ExternalDescriptionStr`, `OrganizationDescriptionStr`,
+  and `CorporateDescriptionStr`; `detail` concatenates the stripped text of each.
+- Public job URL pattern:
+  `https://<host>/hcmUI/CandidateExperience/en/sites/<siteNumber>/job/<jobId>`.
+- These sites render listings client-side, so without this adapter they fall to
+  `ats: "generic"` and return nothing at all.
+
 ## Generic (no known ATS)
 
 No API — `search` does an HTML `GET` on `careers_url`, strips tags, and pattern-matches

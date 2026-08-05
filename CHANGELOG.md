@@ -18,6 +18,32 @@ per-file diff commands.
 - **README: video walkthrough link in Quick start** - The Next New Thing's hands-on
   walkthrough of the workflow (recorded August 2026), for newcomers who want to see the
   setup-to-application flow before reading. Docs only.
+- **`company-pages-search` brought up to the promotion bar** (fork-local skill, 1.0.0 to
+  1.1.0). Three items, in the order upstream named them in Discussion #78:
+
+  - **Oracle Cloud HCM ("Candidate Experience") adapter.** The ATS behind a large share
+    of European bank and corporate career sites. These portals render listings
+    client-side, so they previously fell to `ats: "generic"` and returned nothing at all.
+    `ats_id` carries `"<host>|<siteNumber>"` because the API host is the customer's
+    Fusion tenant and cannot be derived from the company name. List and detail endpoints
+    are both wired, with their quirks documented in `url-reference.md` - the detail
+    endpoint rejects the `expand` values the list endpoint accepts, and the list response
+    nests at `items[0].requisitionList[]`. Verified live against a real site.
+  - **The fetch layer now matches the posture `09-web-research.md` states.** Requests
+    identify honestly as `company-pages-search-skill/1.0` by default; the browser header
+    set is no longer sent speculatively on every request. A `401`/`403` is a bot filter
+    rather than a stated policy, so it triggers one `curl` retry with browser headers -
+    but only after `tools/robots_check.py` confirms the site's published policy permits
+    the path. The CLI deliberately carries **no robots parser of its own**: it shells out
+    to the checker that already has pinned tests, so the repo has one definition of what
+    "the site permits this" means rather than two that drift. The gate fails closed on
+    every unexpected condition (unreadable policy, missing checker, no `python3`).
+  - **76 offline tests** in `cli/tests/`, matching the fixture-based convention of the
+    other portal CLIs, and wired into the `cli-checks` CI matrix alongside them. The
+    suite stubs the network and the gate, so it never makes a request. Coverage: the
+    robots gate's fail-closed behaviour and the honest-by-default headers, the generic
+    scraper and filters, Oracle `ats_id` parsing, the CLI contract, and a regression pin
+    for the Windows path bug that asserts both the fix and the original defect.
 
 - **Spec-pinning tests for the Language Gate's `/rank` contract** (#278) - four regression
   guards in `tests/test_rank_command.py` pinning the `language_gate`/`language_note` fields
@@ -81,6 +107,10 @@ per-file diff commands.
   use the `Mozilla/5.0 (compatible; <portal>-cli/1.0)` token the other portal CLIs use,
   matching the identification posture settled in #277. Verified live: both portals serve
   identical responses to the honest token.
+- **`classifyFailure` misfiled every real timeout as `unknown`** (`company-pages-search`).
+  The pattern matched `timeout`, but `AbortSignal.timeout` produces "The operation timed
+  out" - so genuine timeouts were indistinguishable from unclassifiable errors in the
+  registry's `failure_class` field. Found by the new tests, not by inspection.
 
 - **A `WebFetch` 403 is no longer treated as a dead posting** - `WebFetch` sends a bot user
   agent, and many bank and corporate sites answer it with HTTP 403 while serving the same

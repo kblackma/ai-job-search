@@ -157,6 +157,9 @@ jobs:
       fail-fast: false
       matrix:
         tool:
+          # company-pages-search is fork-local (a Swiss employer watchlist), but it
+          # gets the same typecheck and offline tests as every other portal CLI.
+          - company-pages-search
           - freehire-search
           - jobbank-search
           - jobdanmark-search

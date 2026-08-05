@@ -177,3 +177,100 @@ export async function fetchGeneric(entry: RegistryEntry): Promise<NormalizedJob[
   const normalized = scrapeGenericLinks(html, entry.careers_url, entry.name)
   return applyLocationsFilter(normalized, entry)
 }
+
+// ---------------------------------------------------------------------------
+// Oracle Cloud HCM "Candidate Experience" (Oracle CX) — the ATS behind a large
+// share of European bank and corporate career sites. It exposes an
+// unauthenticated REST endpoint alongside the JS portal:
+//
+//   https://<host>/hcmRestApi/resources/latest/recruitingCEJobRequisitions
+//     ?onlyData=true&finder=findReqs;siteNumber=<siteNumber>,limit=<n>,sortBy=POSTING_DATES_DESC
+//
+// ats_id encodes both parts as "<host>|<siteNumber>", because the host is
+// tenant-specific and cannot be derived from the company name.
+// Example (verified): "iaadtu.fa.ocs.oraclecloud.eu|CX_1" -> UBP, 43 live jobs.
+//
+// Without this adapter these sites fell to ats=generic, which scrapes the JS
+// shell and returns nothing — the portal renders its listings client-side.
+// ---------------------------------------------------------------------------
+
+interface OracleRequisition {
+  Id: string
+  Title: string
+  PostedDate?: string | null
+  PrimaryLocation?: string | null
+  PrimaryLocationCountry?: string | null
+  ShortDescriptionStr?: string | null
+}
+
+export function parseOracleAtsId(atsId: string): { host: string; siteNumber: string } | null {
+  const [host, siteNumber] = atsId.split("|")
+  if (!host || !siteNumber) return null
+  return { host: host.replace(/^https?:\/\//, "").replace(/\/$/, ""), siteNumber }
+}
+
+export async function fetchOracle(entry: RegistryEntry, limit = 200): Promise<NormalizedJob[]> {
+  const parsed = parseOracleAtsId(entry.ats_id)
+  if (!parsed) {
+    throw new Error(
+      `Oracle entry "${entry.name}" needs ats_id in the form "<host>|<siteNumber>" (e.g. "iaadtu.fa.ocs.oraclecloud.eu|CX_1"), got "${entry.ats_id}"`,
+    )
+  }
+  const { host, siteNumber } = parsed
+  const finder = `findReqs;siteNumber=${siteNumber},limit=${limit},sortBy=POSTING_DATES_DESC`
+  const url =
+    `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitions` +
+    `?onlyData=true&expand=requisitionList&finder=${encodeURIComponent(finder)}`
+
+  const data = (await jsonFetch(url)) as { items?: { requisitionList?: OracleRequisition[] }[] } | null
+  const reqs = data?.items?.[0]?.requisitionList ?? []
+
+  const normalized = reqs.map((r) => ({
+    company: entry.name,
+    title: r.Title,
+    location: r.PrimaryLocation ?? r.PrimaryLocationCountry ?? null,
+    // The portal's own job permalink, so the URL is one a human can open.
+    url: `https://${host}/hcmUI/CandidateExperience/en/sites/${siteNumber}/job/${r.Id}`,
+    posted: r.PostedDate ?? null,
+    source_ats: "oracle" as const,
+    id: r.Id,
+  }))
+  return applyLocationsFilter(normalized, entry)
+}
+
+/**
+ * Oracle CX job detail. Verified against UBP (iaadtu.fa.ocs.oraclecloud.eu, CX_1,
+ * job 1451): `finder=ById;Id=<jobId>,siteNumber=<site>` with no `expand` — the
+ * endpoint rejects the `expand` values the list resource accepts, and rejects
+ * `jobId=` as the finder key.
+ */
+export async function fetchOracleDetail(atsId: string, jobId: string): Promise<Record<string, unknown> | null> {
+  const parsed = parseOracleAtsId(atsId)
+  if (!parsed) {
+    throw new Error(
+      `Oracle entry needs ats_id in the form "<host>|<siteNumber>" (e.g. "iaadtu.fa.ocs.oraclecloud.eu|CX_1"), got "${atsId}"`,
+    )
+  }
+  const { host, siteNumber } = parsed
+  const finder = `ById;Id=${jobId},siteNumber=${siteNumber}`
+  const url =
+    `https://${host}/hcmRestApi/resources/latest/recruitingCEJobRequisitionDetails` +
+    `?onlyData=true&finder=${encodeURIComponent(finder)}`
+
+  const data = (await jsonFetch(url)) as { items?: Record<string, unknown>[] } | null
+  const item = data?.items?.[0]
+  if (!item) return null
+  const description = [item.ExternalDescriptionStr, item.OrganizationDescriptionStr, item.CorporateDescriptionStr]
+    .map((s) => stripHtml(typeof s === "string" ? s : ""))
+    .filter(Boolean)
+    .join("\n\n")
+  return {
+    id: String(item.Id ?? jobId),
+    title: item.Title ?? null,
+    location: (item.PrimaryLocation as string | null) ?? (item.PrimaryLocationCountry as string | null) ?? null,
+    url: `https://${host}/hcmUI/CandidateExperience/en/sites/${siteNumber}/job/${jobId}`,
+    posted: (item.ExternalPostedStartDate as string | null) ?? null,
+    source_ats: "oracle",
+    description: description || null,
+  }
+}

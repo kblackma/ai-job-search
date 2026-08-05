@@ -1,5 +1,5 @@
 import { loadRegistry, writeError } from "../helpers.js"
-import { fetchGreenhouseDetail, fetchLeverDetail, fetchSmartRecruitersDetail } from "../ats.js"
+import { fetchGreenhouseDetail, fetchLeverDetail, fetchSmartRecruitersDetail, fetchOracleDetail } from "../ats.js"
 
 export interface DetailOpts {
   company: string
@@ -27,6 +27,7 @@ export async function runDetail(opts: DetailOpts): Promise<number> {
     if (entry.ats === "greenhouse") job = await fetchGreenhouseDetail(entry.ats_id, opts.id)
     else if (entry.ats === "lever") job = await fetchLeverDetail(entry.ats_id, opts.id)
     else if (entry.ats === "smartrecruiters") job = await fetchSmartRecruitersDetail(entry.ats_id, opts.id)
+    else if (entry.ats === "oracle") job = await fetchOracleDetail(entry.ats_id, opts.id)
 
     if (!job) {
       writeError("Job not found", "NOT_FOUND")
