@@ -21,12 +21,25 @@ interface Flags {
 function parseFlags(argv: string[]): Flags {
   const flags: Flags = { _: [] }
   const alias: Record<string, string> = { q: "query", l: "location", n: "limit", c: "company" }
+  const resolve = (raw: string): string => alias[raw] ?? raw
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a.startsWith("--") || a.startsWith("-")) {
-      const key = alias[a.replace(/^-+/, "")] ?? a.replace(/^-+/, "")
+      const bare = a.replace(/^-+/, "")
+      // `--key=value` must be understood, not swallowed. Parsing it as a flag
+      // named "key=value" left --company= silently unset, so a typo queried the
+      // whole registry instead of one employer — the opposite of keeping volume
+      // low. Every other portal CLI in this repo accepts the equals form too.
+      const eq = bare.indexOf("=")
+      if (eq > 0) {
+        flags[resolve(bare.slice(0, eq))] = bare.slice(eq + 1)
+        continue
+      }
+      const key = resolve(bare)
       const next = argv[i + 1]
-      if (next === undefined || next.startsWith("-")) {
+      // A negative number is a value, not the next flag: `--limit -5` must reach
+      // the validator and be rejected rather than parse as `limit: true`.
+      if (next === undefined || (next.startsWith("-") && !/^-\d/.test(next))) {
         flags[key] = true
       } else {
         flags[key] = next
@@ -83,9 +96,21 @@ async function main(): Promise<number> {
   }
 
   const parseIntFlag = (name: string, raw: string | boolean | string[]): number | null => {
-    const val = parseInt(raw as string, 10)
-    if (isNaN(val)) {
-      process.stderr.write(JSON.stringify({ error: `--${name} must be a number, got "${raw}"`, code: "BAD_ARG" }) + "\n")
+    const text = String(raw)
+    // A bare parseInt accepted "5x" and "-5". The former is a typo worth
+    // reporting; the latter used to slip past the `>= 0` guard downstream and
+    // silently return the whole result set instead of the cap that was asked for.
+    if (!/^-?\d+$/.test(text)) {
+      process.stderr.write(
+        JSON.stringify({ error: `--${name} must be a whole number, got "${text}"`, code: "BAD_ARG" }) + "\n",
+      )
+      return null
+    }
+    const val = parseInt(text, 10)
+    if (val < 0) {
+      process.stderr.write(
+        JSON.stringify({ error: `--${name} must not be negative, got ${val}`, code: "BAD_ARG" }) + "\n",
+      )
       return null
     }
     return val
@@ -101,6 +126,18 @@ async function main(): Promise<number> {
 
   if (cmd === "search") {
     const fmt = (flags.format as string) || "json"
+    // An empty or valueless --company must not fall through to "every entry".
+    // Silently widening a one-employer query to the whole watchlist is the same
+    // failure as the --company=X parsing bug, reached a different way.
+    for (const name of ["company", "query", "location"]) {
+      const v = flags[name]
+      if (v !== undefined && (v === true || String(v).trim() === "")) {
+        process.stderr.write(
+          JSON.stringify({ error: `--${name} was given without a value`, code: "BAD_ARG" }) + "\n",
+        )
+        return 1
+      }
+    }
     if (flags.limit !== undefined) {
       const v = parseIntFlag("limit", flags.limit)
       if (v === null) return 1

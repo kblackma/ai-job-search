@@ -38,8 +38,10 @@ per-file diff commands.
     to the checker that already has pinned tests, so the repo has one definition of what
     "the site permits this" means rather than two that drift. The gate fails closed on
     every unexpected condition (unreadable policy, missing checker, no `python3`).
-  - **76 offline tests** in `cli/tests/`, matching the fixture-based convention of the
-    other portal CLIs, and wired into the `cli-checks` CI matrix alongside them. The
+  - **115 offline tests** in `cli/tests/`, matching the fixture-based convention of the
+    other portal CLIs file for file (`cli-contract`, `cli-flag-validation`,
+    `request-timeout`, `retry-backoff`, plus parsing and gate suites), and wired into the
+    `cli-checks` CI matrix alongside them. The
     suite stubs the network and the gate, so it never makes a request. Coverage: the
     robots gate's fail-closed behaviour and the honest-by-default headers, the generic
     scraper and filters, Oracle `ats_id` parsing, the CLI contract, and a regression pin
@@ -107,6 +109,19 @@ per-file diff commands.
   use the `Mozilla/5.0 (compatible; <portal>-cli/1.0)` token the other portal CLIs use,
   matching the identification posture settled in #277. Verified live: both portals serve
   identical responses to the honest token.
+- **`--company=<name>` was silently ignored** (`company-pages-search`). The flag parser
+  only understood the space-separated form, so `--key=value` became a flag literally
+  named `key=value` and `company` stayed unset - the search then ran against **every**
+  entry in the registry instead of the one asked for. On a 45-employer watchlist a single
+  typo became 45 requests, the opposite of the skill's own "keep volume low" rule. The
+  equals form is now parsed, and an empty or valueless `--company`/`--query`/`--location`
+  is rejected rather than widened to the whole list.
+
+- **`--limit` accepted values it then ignored** (`company-pages-search`). `--limit -5`
+  parsed as `limit: true` and the downstream `>= 0` guard skipped the slice entirely, so
+  a capped query quietly returned the full result set; `--limit 5x` truncated to 5.
+  Negative, fractional and trailing-junk values are now rejected with `BAD_ARG`.
+
 - **`classifyFailure` misfiled every real timeout as `unknown`** (`company-pages-search`).
   The pattern matched `timeout`, but `AbortSignal.timeout` produces "The operation timed
   out" - so genuine timeouts were indistinguishable from unclassifiable errors in the
