@@ -41,8 +41,8 @@ per-file diff commands.
   - **115 offline tests** in `cli/tests/`, matching the fixture-based convention of the
     other portal CLIs file for file (`cli-contract`, `cli-flag-validation`,
     `request-timeout`, `retry-backoff`, plus parsing and gate suites), and wired into the
-    `cli-checks` CI matrix alongside them. The
-    suite stubs the network and the gate, so it never makes a request. Coverage: the
+    `cli-checks` CI matrix alongside them. The suite stubs the network and the gate, so
+    it never makes a request. Coverage: the
     robots gate's fail-closed behaviour and the honest-by-default headers, the generic
     scraper and filters, Oracle `ats_id` parsing, the CLI contract, and a regression pin
     for the Windows path bug that asserts both the fix and the original defect.
