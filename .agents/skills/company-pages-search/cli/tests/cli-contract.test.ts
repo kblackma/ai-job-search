@@ -3,6 +3,14 @@ import { runCLI, parseJSON } from "./helpers";
 
 // Every case here is offline: `list` reads the registry only, and the `search`
 // and `detail` cases all fail argument or registry validation before any fetch.
+//
+// The registry itself is not fixed: company_pages.json is personal and gitignored,
+// so CI reads the committed example while a developer's checkout may not. Cases
+// that depend on the example's contents guard on `usingExampleRegistry` rather
+// than assuming it.
+
+const usingExampleRegistry = (stderr: string): boolean =>
+  stderr.includes("USING_EXAMPLE_REGISTRY");
 
 interface ListEntry {
   name: string;
@@ -59,6 +67,9 @@ describe("list", () => {
 
   test("the example registry demonstrates every supported ats type", async () => {
     const r = await runCLI(["list"]);
+    // Only assert this against the shipped example. A developer with a personal
+    // company_pages.json is under no obligation to cover every ats type.
+    if (!usingExampleRegistry(r.stderr)) return;
     const out = parseJSON<{ results?: ListEntry[] } | ListEntry[]>(r);
     const entries = Array.isArray(out) ? out : (out.results ?? []);
     const seen = new Set(entries.map((e) => e.ats));
@@ -119,7 +130,12 @@ describe("detail argument validation", () => {
   });
 
   test("ats=generic has no detail API and says so", async () => {
-    const r = await runCLI(["detail", "--company", "Placeholder Genève Pharma SA", "--id", "1"]);
+    const list = await runCLI(["list"]);
+    const out = parseJSON<{ results?: ListEntry[] } | ListEntry[]>(list);
+    const entries = Array.isArray(out) ? out : (out.results ?? []);
+    const generic = entries.find((e) => e.ats === "generic");
+    if (!generic) return; // a personal registry need not contain a generic entry
+    const r = await runCLI(["detail", "--company", generic.name, "--id", "1"]);
     expect(r.exitCode).toBe(1);
     expect(JSON.parse(r.stderr.split("\n").pop()!).code).toBe("NO_DETAIL_API");
   });
