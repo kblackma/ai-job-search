@@ -83,18 +83,46 @@ def _groups(text):
                 out[a].append((field == 'allow', value))
     return out
 
-def _match(pattern, path):
-    """RFC 9309 wildcard match; returns match length or -1.
+_HEX = '0123456789abcdefABCDEF'
 
-    The pattern is percent-decoded to match the already-decoded path. Without
-    this, "Disallow: /foo%20bar" never matched "/foo bar" and the rule was
-    silently skipped - a fail-open on any site that encodes its own rules.
+
+def _pattern_tokens(pattern):
+    """Split a rule pattern into (char, is_metacharacter) pairs.
+
+    Percent-escapes are decoded so an encoded rule matches the decoded path:
+    "Disallow: /foo%20bar" has to match "/foo bar", and not decoding it was a
+    fail-open on any site that encodes its own rules.
+
+    A decoded escape is always a LITERAL, though. A blanket unquote() turned
+    "%2A" into a live wildcard and "%24" into an end-anchor, so a site writing a
+    literal asterisk in its rules got wildcard matching instead of the character
+    it asked for. Only a raw "*" or "$" in the source text is a metacharacter.
     """
+    out, i, n = [], 0, len(pattern)
+    while i < n:
+        c = pattern[i]
+        if c == '%' and i + 3 <= n and pattern[i + 1] in _HEX and pattern[i + 2] in _HEX:
+            out.append((unquote(pattern[i:i + 3]), False))
+            i += 3
+            continue
+        out.append((c, c in '*$'))
+        i += 1
+    return out
+
+
+def _match(pattern, path):
+    """RFC 9309 wildcard match; returns match length or -1."""
     if pattern == '':
         return -1
-    pattern = unquote(pattern)
-    rx = '^' + ''.join('.*' if c == '*' else ('$' if c == '$' else re.escape(c)) for c in pattern)
-    return len(pattern) if re.match(rx, path) else -1
+    tokens = _pattern_tokens(pattern)
+    rx = '^' + ''.join(
+        ('.*' if ch == '*' else '$') if meta else re.escape(ch)
+        for ch, meta in tokens
+    )
+    # Specificity is measured on the decoded pattern, so an encoded rule and its
+    # plain equivalent compete on equal terms rather than the encoded one
+    # winning on raw character count.
+    return len(tokens) if re.match(rx, path) else -1
 
 def allowed(text, agent, path):
     g = _groups(text)

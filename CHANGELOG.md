@@ -13,6 +13,20 @@ per-file diff commands.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A decoded percent-escape is now a literal, never a metacharacter**
+  (`tools/robots_check.py`). The percent-decode fix in #286 used a blanket
+  `unquote()`, which also decoded reserved characters - so `%2A` became a live
+  wildcard and `%24` an end-anchor, and a site writing a literal asterisk in its rules
+  got wildcard matching instead of the character it asked for. That errs toward
+  over-blocking, which is the safe direction for a gate, but it is not what the rule
+  said. Only a raw `*` or `$` in the source text is a metacharacter now; specificity is
+  measured on the decoded pattern so an encoded rule and its plain equivalent compete on
+  equal terms. Malformed escapes (`%`, `%ZZ`, a truncated `%2`) stay literal rather than
+  raising. 11 cases pinned, including that `%20` still decodes - the original #286 fix.
+  Flagged upstream as non-blocking on the #286 merge; fixed here.
+
 ### Added
 
 - **README: video walkthrough link in Quick start** - The Next New Thing's hands-on

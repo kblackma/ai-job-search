@@ -209,6 +209,74 @@ class TestArgumentHardening(unittest.TestCase):
         self.assertEqual(seen[0], "https://x.example/robots.txt")
 
 
+class TestEncodedMetacharacters(unittest.TestCase):
+    """A decoded percent-escape is a literal, never a metacharacter.
+
+    The percent-decode fix in #286 used a blanket unquote(), which also decoded
+    reserved characters - so "%2A" became a live wildcard and "%24" an
+    end-anchor, and a site writing a literal asterisk in its rules got wildcard
+    matching instead of the character it asked for. Upstream flagged it on the
+    merge as non-blocking; these pin the tightened behaviour.
+
+    Only a raw "*" or "$" in the source text is a metacharacter.
+    """
+
+    def _blocked(self, rule, path):
+        return not allowed("User-agent: *\n%s\n" % rule, "*", path)
+
+    def test_encoded_asterisk_is_a_literal_asterisk(self):
+        self.assertTrue(self._blocked("Disallow: /a%2Ab", "/a*b"))
+
+    def test_encoded_asterisk_does_not_match_arbitrary_text(self):
+        """The over-blocking case: this used to swallow every /aXYZb path."""
+        self.assertFalse(self._blocked("Disallow: /a%2Ab", "/aXYZb"))
+
+    def test_encoded_asterisk_is_case_insensitive_in_the_escape(self):
+        self.assertFalse(self._blocked("Disallow: /a%2ab", "/aXYZb"))
+
+    def test_a_raw_asterisk_is_still_a_wildcard(self):
+        self.assertTrue(self._blocked("Disallow: /a*b", "/aXYZb"))
+
+    def test_encoded_dollar_is_a_literal_not_an_end_anchor(self):
+        self.assertTrue(self._blocked("Disallow: /pay%24", "/pay$"))
+        self.assertTrue(self._blocked("Disallow: /pay%24", "/pay$more"))
+
+    def test_a_raw_dollar_still_anchors(self):
+        self.assertTrue(self._blocked("Disallow: /x$", "/x"))
+        self.assertFalse(self._blocked("Disallow: /x$", "/xy"))
+
+    def test_a_raw_and_an_encoded_wildcard_can_coexist(self):
+        self.assertTrue(self._blocked("Disallow: /a%2A*c", "/a*bc"))
+        self.assertFalse(self._blocked("Disallow: /a%2A*c", "/aXbc"))
+
+    def test_ordinary_escapes_still_decode(self):
+        """Regression on #286's original fix."""
+        self.assertTrue(self._blocked("Disallow: /foo%20bar", "/foo bar"))
+        self.assertFalse(self._blocked("Disallow: /foo%20bar", "/foobar"))
+        self.assertTrue(self._blocked("Disallow: /a%2Fb", "/a/b"))
+
+    def test_specificity_is_measured_on_the_decoded_pattern(self):
+        """An encoded rule must not win a tie on raw character count."""
+        from robots_check import _match
+
+        self.assertEqual(_match("/foo%20bar", "/foo bar"), _match("/foo bar", "/foo bar"))
+
+    def test_malformed_escapes_are_literal_and_do_not_crash(self):
+        for rule, path in (
+            ("Disallow: /a%", "/a%"),
+            ("Disallow: /a%ZZ", "/a%ZZ"),
+            ("Disallow: /a%2", "/a%2"),
+        ):
+            with self.subTest(rule=rule):
+                self.assertTrue(self._blocked(rule, path))
+
+    def test_plain_rules_are_untouched(self):
+        self.assertFalse(allowed(JOBUP, "*", "/api/x"))
+        self.assertTrue(allowed(JOBUP, "*", "/en/jobs/x"))
+        self.assertFalse(allowed(BARCLAYS, "*", "/cs/"))
+        self.assertTrue(allowed(BARCLAYS, "*", "/careers/"))
+
+
 
 if __name__ == "__main__":
     unittest.main()
