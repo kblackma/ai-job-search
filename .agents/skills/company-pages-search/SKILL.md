@@ -1,6 +1,6 @@
 ---
 name: company-pages-search
-version: 1.1.0
+version: 1.2.0
 description: >
   Registry-driven lookups of specific companies' own career pages — for
   corporates that don't syndicate all their positions to job boards (common
@@ -185,6 +185,15 @@ the boundary `.claude/skills/job-application-assistant/09-web-research.md` state
 retry exists to get past bot-filtering firewalls on sites whose robots.txt permits
 access, and it is never used to override a site that has said no.
 
+Redirects are followed **one hop at a time, and every hop is gated.** Using `curl -L`
+would have sent the browser header set to whatever host the chain ended on, whose
+`robots.txt` was never consulted, so permission granted for one origin was silently
+spent on another.
+
+A `200` whose body is not a robots.txt (an HTML error page, a JSON blob) counts as
+unreadable, not as permission. Such a body parses to zero rules and zero rules read as
+"allowed", which is a fail-open. A genuinely empty file is still allow-all per RFC 9309.
+
 The gate fails closed. If `robots.txt` cannot be read, if the checker is missing, or if
 `python3` is unavailable, permission is unconfirmed and the retry does not run — the
 entry degrades to "no results" and the agent falls back to WebFetch/WebSearch. The CLI
@@ -196,6 +205,11 @@ repo has exactly one definition of what "the site permits this" means.
 - The CLI retries 429/5xx with exponential backoff.
 - `locations_filter` on a registry entry and `--location` on the CLI both apply (AND);
   set `locations_filter: []` to disable the registry-level filter for that company.
+- A 401/403 distinguishes **`robots_unconfirmed`** (we may not fetch it) from `bot_blocked`
+  (we may, and the WAF beat the retry anyway) - different problems, different fixes.
+- A list endpoint answering 404, an unknown `ats` value, or a Lever error object now
+  **throw** instead of returning `[]`. A wrong `ats_id` used to read as "this employer
+  has no openings" indefinitely.
 - Fetch failures are classified (`bot_blocked`, `url_not_found`, `rate_limited`,
   `server_error`, `timeout`, `dns_failure`, `tls_error`) so a wrong URL is
   distinguishable from a block.

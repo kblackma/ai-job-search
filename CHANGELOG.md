@@ -27,6 +27,23 @@ per-file diff commands.
   raising. 11 cases pinned, including that `%20` still decodes - the original #286 fix.
   Flagged upstream as non-blocking on the #286 merge; fixed here.
 
+- **The browser-header retry could reach a host it never authorized**
+  (`company-pages-search`). `curl -L` followed redirects, so a permitted first URL could
+  redirect anywhere and the full browser header set went to a host whose `robots.txt`
+  was never consulted. Redirects are now followed one hop at a time with **every hop
+  gated**. The old test pinned "the gate gets the exact URL being fetched" for the
+  pre-redirect string only, which codified the wrong invariant.
+
+- **Failures that read as "this employer has no openings"** (`company-pages-search`). A
+  list endpoint answering 404, an unknown `ats` value falling through to the generic
+  scraper, and Lever's 200-with-an-error-object all returned `[]`, indistinguishable
+  from a genuinely empty board - so a typo'd `ats_id` stayed invisible indefinitely.
+  They throw now. The generic scraper also only matched double-quoted `href`, so
+  single-quoted and unquoted static career pages scraped to zero links; a live registry
+  scan went from 319 to 385 jobs once that was fixed. A 401/403 now reports
+  `robots_unconfirmed` (we may not fetch it) separately from `bot_blocked` (we may, and
+  the WAF beat the retry anyway).
+
 ### Added
 
 - **README: video walkthrough link in Quick start** - The Next New Thing's hands-on

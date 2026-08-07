@@ -182,8 +182,10 @@ describe("htmlFetch escalation on 403", () => {
       gate: async () => false,
       curl: async (_url, gate) => ((await gate(_url)) ? "<html>via curl</html>" : ""),
     });
-    await expect(p).rejects.toThrow(/bot_blocked/);
-    await expect(p).rejects.toThrow(/robots gate refused/);
+    // The message must say WHICH of the two happened: a site we may not fetch
+    // and a site whose WAF beat us are different problems with different fixes.
+    await expect(p).rejects.toThrow(/robots_unconfirmed/);
+    await expect(p).rejects.toThrow(/does not permit this path/);
   });
 
   test("401 escalates on the same path as 403", async () => {

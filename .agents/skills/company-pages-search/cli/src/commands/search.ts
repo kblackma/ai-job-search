@@ -20,8 +20,13 @@ async function fetchEntry(entry: RegistryEntry): Promise<NormalizedJob[]> {
     case "oracle":
       return fetchOracle(entry)
     case "generic":
-    default:
       return fetchGeneric(entry)
+    default:
+      // A typo'd ats used to fall through to the generic scraper, which returns
+      // nothing for a JS portal — so "greenhose" read as "no openings" forever.
+      throw new Error(
+        `"${entry.name}" declares unknown ats "${entry.ats}" - expected greenhouse, lever, smartrecruiters, oracle or generic [config_error]`,
+      )
   }
 }
 

@@ -143,6 +143,8 @@ export async function robotsCheckPyGate(
   }
 }
 
+const MAX_REDIRECTS = 5
+
 /**
  * Last-resort HTML fetch via curl, behind the robots gate.
  *
@@ -152,25 +154,52 @@ export async function robotsCheckPyGate(
  * cargill.com, both 403 via fetch and 200 via curl. No header set closes that
  * gap, so when fetch reports 403 we retry once through curl.
  *
- * Returns "" when the gate refuses, when curl is unavailable, or when curl also
- * fails, so callers degrade to "no results" rather than crashing.
+ * Redirects are followed one hop at a time and **every hop is gated**. Using
+ * `curl -L` here would have sent the full browser header set to whatever host
+ * the chain ended on, whose robots.txt was never consulted — permission granted
+ * for one origin silently spent on another. Gating only the first URL is the
+ * wrong invariant.
+ *
+ * Returns "" when the gate refuses at any hop, when curl is unavailable, or
+ * when curl fails, so callers degrade rather than crashing.
  */
 export async function curlFallback(url: string, gate: RobotsGate = robotsCheckPyGate): Promise<string> {
-  if (!(await gate(url))) return ""
   const { execFile } = await import("node:child_process")
   const { promisify } = await import("node:util")
   const run = promisify(execFile)
-  const args = [
-    "-sL", "--compressed", "--max-time", "25",
-    ...Object.entries(BROWSER_HEADERS).flatMap(([k, v]) => ["-H", `${k}: ${v}`]),
-    url,
-  ]
-  try {
-    const { stdout } = await run("curl", args, { maxBuffer: 20 * 1024 * 1024, timeout: 30000 })
-    return stdout ?? ""
-  } catch {
-    return ""
+
+  let current = url
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    if (!(await gate(current))) return ""
+    const args = [
+      "-s", "--compressed", "--max-time", "25",
+      // No -L: each hop is gated explicitly below.
+      "-w", "\n__CPS_STATUS__%{http_code}\n__CPS_LOCATION__%{redirect_url}",
+      ...Object.entries(BROWSER_HEADERS).flatMap(([k, v]) => ["-H", `${k}: ${v}`]),
+      // "--" terminates option parsing: a careers_url beginning with a dash
+      // would otherwise be read by curl as a flag rather than a URL.
+      "--", current,
+    ]
+    let stdout: string
+    try {
+      ;({ stdout } = await run("curl", args, { maxBuffer: 20 * 1024 * 1024, timeout: 30000 }))
+    } catch {
+      return ""
+    }
+    const at = stdout.lastIndexOf("\n__CPS_STATUS__")
+    if (at < 0) return ""
+    const body = stdout.slice(0, at)
+    const trailer = stdout.slice(at + 1)
+    const status = parseInt(trailer.slice("__CPS_STATUS__".length, "__CPS_STATUS__".length + 3), 10)
+    const location = trailer.slice(trailer.indexOf("__CPS_LOCATION__") + "__CPS_LOCATION__".length).trim()
+
+    if (status >= 300 && status < 400 && location) {
+      current = location
+      continue
+    }
+    return status >= 200 && status < 300 ? body : ""
   }
+  return ""
 }
 
 /**
@@ -301,11 +330,21 @@ export async function htmlFetch(url: string, deps: FetchDeps = {}): Promise<stri
     }
     if (response.status === 404) return ""
     if (response.status === 403 || response.status === 401) {
-      const viaCurl = await curl(url, gate)
+      // Ask the gate first so the error can say which of the two happened.
+      // A single "gate refused or curl failed" message made a site we were
+      // allowed to fetch indistinguishable from one we were not.
+      const permitted = await gate(url)
+      if (!permitted) {
+        throw new Error(
+          `Request failed: ${response.status} ${response.statusText} ` +
+            `[robots_unconfirmed] (robots.txt does not permit this path, or could not be read)`,
+        )
+      }
+      const viaCurl = await curl(url, async () => true)
       if (viaCurl) return viaCurl
       throw new Error(
         `Request failed: ${response.status} ${response.statusText} ` +
-          `[${classifyFailure(response.status)}] (robots gate refused or curl fallback failed)`,
+          `[${classifyFailure(response.status)}] (robots.txt permits it; the browser-header retry was still blocked)`,
       )
     }
     if (!response.ok) {
@@ -352,11 +391,17 @@ const JOB_KEYWORDS = [
 export function scrapeGenericLinks(html: string, baseUrl: string, company: string): NormalizedJob[] {
   const results: NormalizedJob[] = []
   const seen = new Set<string>()
-  const linkRe = /<a\b[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/gi
+  // href="…" | href='…' | href=… (unquoted). Only the double-quoted form was
+  // matched before, so a single-quoted static career page scraped to zero links
+  // and read as "this employer has no openings".
+  const linkRe = /<a\b[^>]*?href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>`]+))[^>]*>([\s\S]*?)<\/a>/gi
   let m: RegExpExecArray | null
   while ((m = linkRe.exec(html)) !== null) {
-    const rawHref = decodeHtmlEntities(m[1])
-    const text = decodeHtmlEntities(m[2].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+    const rawHref = decodeHtmlEntities(m[1] ?? m[2] ?? m[3] ?? "")
+    const text = decodeHtmlEntities(m[4].replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim())
+    // javascript:/data:/mailto: are not postings, and absolutize would happily
+    // return them as "URLs".
+    if (/^(javascript|data|mailto|tel):/i.test(rawHref.trim())) continue
     const hay = (rawHref + " " + text).toLowerCase()
     if (!JOB_KEYWORDS.some((k) => hay.includes(k))) continue
     if (!text) continue

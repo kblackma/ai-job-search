@@ -3,6 +3,20 @@
 
 import { jsonFetch, htmlFetch, scrapeGenericLinks, applyLocationsFilter, type NormalizedJob, type RegistryEntry } from "./helpers.js"
 
+/**
+ * A list endpoint that answers "not found" means the registry's ats_id is wrong,
+ * not that the employer has no openings. Returning [] there is indistinguishable
+ * from a genuinely empty board, so a typo'd token silently reads as "nothing
+ * open here" for as long as it goes unnoticed. Fail loudly instead.
+ */
+function requireBoard(data: unknown, entry: RegistryEntry, what: string): void {
+  if (data === null) {
+    throw new Error(
+      `${what} for "${entry.name}" returned 404 - ats_id "${entry.ats_id}" looks wrong [url_not_found]`,
+    )
+  }
+}
+
 function decodeEntities(s: string): string {
   return s
     .replace(/&amp;/g, "&")
@@ -41,6 +55,7 @@ interface GreenhouseJob {
 export async function fetchGreenhouse(entry: RegistryEntry, detailed = false): Promise<NormalizedJob[]> {
   const url = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(entry.ats_id)}/jobs${detailed ? "?content=true" : ""}`
   const data = (await jsonFetch(url)) as { jobs?: GreenhouseJob[] } | null
+  requireBoard(data, entry, "Greenhouse board")
   const jobs = data?.jobs ?? []
   const normalized = jobs.map((j) => ({
     company: entry.name,
@@ -86,7 +101,13 @@ interface LeverJob {
 export async function fetchLever(entry: RegistryEntry): Promise<NormalizedJob[]> {
   const url = `https://api.lever.co/v0/postings/${encodeURIComponent(entry.ats_id)}?mode=json`
   const data = (await jsonFetch(url)) as LeverJob[] | { ok: false; error: string } | null
-  if (!data || !Array.isArray(data)) return []
+  requireBoard(data, entry, "Lever board")
+  if (!Array.isArray(data)) {
+    // Lever answers a bad token with 200 and an error object. Treating that as
+    // zero jobs hid the misconfiguration behind a plausible empty result.
+    const detail = data && typeof data === "object" && "error" in data ? String(data.error) : "unexpected shape"
+    throw new Error(`Lever board for "${entry.name}" did not return a job list: ${detail} [url_not_found]`)
+  }
   const normalized = data.map((j) => ({
     company: entry.name,
     title: j.text,
@@ -130,6 +151,7 @@ interface SmartRecruitersJob {
 export async function fetchSmartRecruiters(entry: RegistryEntry): Promise<NormalizedJob[]> {
   const url = `https://api.smartrecruiters.com/v1/companies/${encodeURIComponent(entry.ats_id)}/postings`
   const data = (await jsonFetch(url)) as { content?: SmartRecruitersJob[] } | null
+  requireBoard(data, entry, "SmartRecruiters company")
   const jobs = data?.content ?? []
   const normalized = jobs.map((j) => {
     const locParts = [j.location?.city, j.location?.region, j.location?.country].filter(Boolean)
@@ -223,6 +245,7 @@ export async function fetchOracle(entry: RegistryEntry, limit = 200): Promise<No
     `?onlyData=true&expand=requisitionList&finder=${encodeURIComponent(finder)}`
 
   const data = (await jsonFetch(url)) as { items?: { requisitionList?: OracleRequisition[] }[] } | null
+  requireBoard(data, entry, "Oracle CX site")
   const reqs = data?.items?.[0]?.requisitionList ?? []
 
   const normalized = reqs.map((r) => ({
